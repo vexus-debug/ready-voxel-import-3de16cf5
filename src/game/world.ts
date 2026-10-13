@@ -641,12 +641,39 @@ function cityOffset(world: World, X: number, Y: number, Z: number, out: number[]
       for (let dx = -1; dx <= 0; dx++) {
         const id = world.get(X + dx, Y + dy, Z + dz);
         if (id === 0 || isPassable(id)) continue;
-        if (!isCity(id) || isTransparent(id)) return;
+        if (!isCity(id)) return;
         cnt++; sx += dx + 0.5; sz += dz + 0.5;
       }
   if (cnt === 0 || cnt === 8 || cnt === 4) return;
   const k = ((4 - cnt) / 4) / cnt * 1.3;
   out[0] = sx * k; out[2] = sz * k;
+}
+
+/** Feature-preserving normals for Linefield faces: average with coincident vertices whose
+ * normals are within 35deg, so chamfered/curved facades shade smoothly but real corners stay crisp. */
+function smoothCityNormals(g: THREE.BufferGeometry, verts: number[]) {
+  if (!verts.length) return;
+  const P = g.getAttribute("position").array as Float32Array;
+  const N = g.getAttribute("normal").array as Float32Array;
+  const groups = new Map<string, number[]>();
+  for (const v of verts) {
+    const k = `${Math.round(P[v * 3] * 64)},${Math.round(P[v * 3 + 1] * 64)},${Math.round(P[v * 3 + 2] * 64)}`;
+    const a = groups.get(k); if (a) a.push(v); else groups.set(k, [v]);
+  }
+  const C = Math.cos((35 * Math.PI) / 180), out = new Float32Array(N.length); out.set(N);
+  for (const list of groups.values()) {
+    if (list.length < 2) continue;
+    for (const a of list) {
+      let x = 0, y = 0, z = 0;
+      for (const b of list) {
+        const d = N[a * 3] * N[b * 3] + N[a * 3 + 1] * N[b * 3 + 1] + N[a * 3 + 2] * N[b * 3 + 2];
+        if (d >= C) { x += N[b * 3]; y += N[b * 3 + 1]; z += N[b * 3 + 2]; }
+      }
+      const l = Math.hypot(x, y, z) || 1;
+      out[a * 3] = x / l; out[a * 3 + 1] = y / l; out[a * 3 + 2] = z / l;
+    }
+  }
+  N.set(out); g.getAttribute("normal").needsUpdate = true;
 }
 
 export function buildChunkGeometry(world: World, cx: number, cz: number) {
@@ -691,6 +718,7 @@ export function buildChunkGeometry(world: World, cx: number, cz: number) {
     return v ? Math.pow(v / LMAX, 1.5) : 0;
   };
   const blk: number[] = [];
+  const cityV: number[] = [];
   const tileUV = (tile: number, u: number, v: number) => {
     const tc = tile % ATLAS_COLS, tr = Math.floor(tile / ATLAS_COLS);
     u = Math.min(1 - eps, Math.max(eps, u)); v = Math.min(1 - eps, Math.max(eps, v));
@@ -773,12 +801,12 @@ export function buildChunkGeometry(world: World, cx: number, cz: number) {
           const isWater = id === B.WATER;
           const sink = isWater && (y + 1 >= H || world.get(wx, y + 1, wz) !== B.WATER) ? 0.12 : 0;
           const tree = id === B.LOG || id === B.LEAVES;
-          const city = !nat && !tree && isCity(id) && !isTransparent(id);
+          const city = !nat && !tree && isCity(id);
           for (const c of F.c) {
             const X = ox + x + c[0], Y = y + c[1], Z = oz + z + c[2];
             if (nat) smoothOffset(world, X, Y, Z, off);
             else if (tree) treeOffset(world, X, Y, Z, id, off);
-            else if (city) cityOffset(world, X, Y, Z, off);
+            else if (city) { cityOffset(world, X, Y, Z, off); cityV.push(pos.length / 3); }
             else off[0] = off[1] = off[2] = 0;
             pos.push(X + off[0], Y + off[1] - (c[1] ? sink : 0), Z + off[2]);
             const u = (tc + (c[3] ? 1 - eps : eps)) / ATLAS_COLS;
@@ -804,6 +832,7 @@ export function buildChunkGeometry(world: World, cx: number, cz: number) {
   g.addGroup(0, ind.length, 0);
   g.addGroup(ind.length, wind.length, 1);
   g.computeVertexNormals();
+  smoothCityNormals(g, cityV);
   g.computeBoundingSphere();
   return g;
 }
