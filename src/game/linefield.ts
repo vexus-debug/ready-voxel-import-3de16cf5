@@ -3,7 +3,7 @@
 // Stored as 64 gzip tiles (64x64 columns each) of per-column runs: [u16 runCount][(u8 id, u8 len)...] bottom-up.
 // Tiles stream in on demand when nearby chunks generate; world.ts restamps chunks once a tile arrives.
 // Must not import values from world.ts at module scope (world.ts imports this module).
-import manifest from "@/assets/linefield/manifest.json";
+// Tiles are bundled as static files in public/linefield/lf_X_Z.bin.
 
 export const LF_SIZE = 512;
 export const LF_TS = 64; // tile size in columns
@@ -22,10 +22,10 @@ export const onLinefieldTile = (f: (tx: number, tz: number) => void) => listener
 
 async function load(tx: number, tz: number) {
   const k = `${tx}_${tz}`;
-  const url = (manifest as Record<string, string>)[k];
-  if (!url) return;
+  if (tx < 0 || tz < 0 || tx >= LF_SIZE / LF_TS || tz >= LF_SIZE / LF_TS) return;
   try {
-    const res = await fetch(url);
+    const res = await fetch(`/linefield/lf_${k}.bin`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const ds = res.body!.pipeThrough(new DecompressionStream("gzip"));
     const data = new Uint8Array(await new Response(ds).arrayBuffer());
     const off = new Uint32Array(LF_TS * LF_TS);
