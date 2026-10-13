@@ -628,6 +628,27 @@ function treeOffset(world: World, X: number, Y: number, Z: number, id: number, o
   }
 }
 
+/** Linefield de-voxelization: chamfer convex building corners and collapse 1-block staircases
+ * into continuous diagonals/curves. Horizontal only so floors and roofs stay level; depends only
+ * on the lattice point, so neighbouring faces stay watertight. */
+const isCity = (id: number) => id >= 32 && id <= 54;
+function cityOffset(world: World, X: number, Y: number, Z: number, out: number[]) {
+  out[0] = out[1] = out[2] = 0;
+  if (X < LF_X0 || X > LF_X0 + LF_SIZE || Z < LF_Z0 || Z > LF_Z0 + LF_SIZE || Y <= LF_GROUND) return;
+  let cnt = 0, sx = 0, sz = 0;
+  for (let dy = -1; dy <= 0; dy++)
+    for (let dz = -1; dz <= 0; dz++)
+      for (let dx = -1; dx <= 0; dx++) {
+        const id = world.get(X + dx, Y + dy, Z + dz);
+        if (id === 0 || isPassable(id)) continue;
+        if (!isCity(id) || isTransparent(id)) return;
+        cnt++; sx += dx + 0.5; sz += dz + 0.5;
+      }
+  if (cnt === 0 || cnt === 8 || cnt === 4) return;
+  const k = ((4 - cnt) / 4) / cnt * 1.3;
+  out[0] = sx * k; out[2] = sz * k;
+}
+
 export function buildChunkGeometry(world: World, cx: number, cz: number) {
   const chunk = world.getChunk(cx, cz);
   const pos: number[] = [], uv: number[] = [], col: number[] = [], ind: number[] = [], wind: number[] = [];
@@ -752,10 +773,12 @@ export function buildChunkGeometry(world: World, cx: number, cz: number) {
           const isWater = id === B.WATER;
           const sink = isWater && (y + 1 >= H || world.get(wx, y + 1, wz) !== B.WATER) ? 0.12 : 0;
           const tree = id === B.LOG || id === B.LEAVES;
+          const city = !nat && !tree && isCity(id) && !isTransparent(id);
           for (const c of F.c) {
             const X = ox + x + c[0], Y = y + c[1], Z = oz + z + c[2];
             if (nat) smoothOffset(world, X, Y, Z, off);
             else if (tree) treeOffset(world, X, Y, Z, id, off);
+            else if (city) cityOffset(world, X, Y, Z, off);
             else off[0] = off[1] = off[2] = 0;
             pos.push(X + off[0], Y + off[1] - (c[1] ? sink : 0), Z + off[2]);
             const u = (tc + (c[3] ? 1 - eps : eps)) / ATLAS_COLS;
